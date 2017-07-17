@@ -1,0 +1,167 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Thomas Glucksman"
+date: "July 14, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+## Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## The Data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har
+
+
+## Goal
+The purpose of this project is to predict the manner in which the participants did the exercise, denoted by the "classe" variable in the training set. To do this we will select the predictors we wish to train our models on and implement machine learning algorithms that I believe are the most accurate and best suited for this type of problem.
+
+## Reproducibility 
+
+For this project I will use the following R libraries and seed for reproducible results.
+
+```{r libraries, warning=F, message=F}
+library(caret)
+library(rpart)
+library(RColorBrewer)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+library(knitr)
+
+set.seed(6969)
+```
+
+## Data Processing
+
+First we need to load and clean our training and test data. Any processing we do to training we will do the same on the test set. Then we will partition our training set further into training and validation sets.
+
+```{r load data}
+train_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+training_raw <- read.csv(url(train_url))
+testing_raw <- read.csv(url(test_url))
+```
+
+The first few columns of the data do not provide any relevant information on the exercises performed, so let's remove those first.
+
+```{r cleaning1}
+training_wip <- training_raw[,-(1:7)]
+testing_wip <- testing_raw[,-(1:7)]
+```
+
+It also appears that a lot of columns have a high percentage of missing values, so let's remove those as well.
+
+```{r cleaning2}
+# set the threshold so we will remove any observation with more than 2/3rds of its data missing
+threshold = 0.66
+
+missing_freqs_training <- lapply(training_wip, function(x) sum(is.na(x))/length(x))
+missing_freqs_testing <- lapply(testing_wip, function(x) sum(is.na(x))/length(x))
+
+training_wip <- training_wip[, missing_freqs_training < threshold]
+testing_wip <- testing_wip[, missing_freqs_testing < threshold]
+```
+
+Lastly I will remove columns with Near-Zero variance, as they will not be useful as predictors to train on.
+Also we will coerce all data into the same class for consistency.
+
+```{r cleaning3}
+nzv_train <- nearZeroVar(training_wip, saveMetrics = T)
+training_wip <- training_wip[,nzv_train$nzv == F]
+
+nzv_test <- nearZeroVar(testing_wip, saveMetrics = T)
+testing_wip <- testing_wip[,nzv_test$nzv == F]
+
+# coerce all data to numeric, except for outcome (factor)
+training_clean <- data.frame(lapply(training_wip[,-ncol(training_wip)], as.numeric), classe = training_wip$classe)
+testing_clean <- data.frame(lapply(testing_wip, as.numeric))
+
+ncol(training_raw) - ncol(training_clean)
+ncol(training_clean)
+```
+We ended up removing 107 columns from the original dataset, leaving us with a total of 52 predictors, for a total of 53 columns counting the outcomes.
+
+## Cross Validation
+
+We will split our processed training set into a smaller training set, and a validation set as a means for validating each model before moving on to the test set. Later on, I will employ repeated cross validation on the smaller training set for algorithms that may be more computationally intensive, since this dataset is still fairly large.
+
+```{r validation}
+inTrain <- createDataPartition(training_clean$classe, p = 0.6, list = F)
+myTrain <- training_clean[inTrain,]
+validation <- training_clean[-inTrain,]
+```
+
+## Prediction Model 1: Classification Tree
+Since our outcomes are categorical, it is reasonable to first try out a decision tree.
+
+```{r rpart}
+mod_rpart <- train(classe ~ ., data = myTrain, method = 'rpart')
+fancyRpartPlot(mod_rpart$finalModel)
+
+pred_rpart <- predict(mod_rpart, validation)
+result <- confusionMatrix(validation$classe, pred_rpart)
+result
+```
+
+With an overall accuracy of <code>0.4915</code>, this clearly is not the best model fit. Looking at the confusion matrix we can see that our model completely fails to predict outcome D, and is widely inaccurate for A, B, and C, so we need  to try something else.
+
+## Model 2: Boosting
+
+Since boosting is an iterative process and our dataset is fairly large, I will set a <code>trainControl</code> object in the <code>train</code> function to perform repeated cross validation and break the training set into 5 folds.
+
+```{r boosting, message = F, cache = T}
+fitControl <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+
+mod_gbm <- train(classe ~ ., data = myTrain, method = 'gbm', trControl = fitControl, verbose = F)
+pred_gbm <- predict(mod_gbm, validation)
+result <- confusionMatrix(validation$classe, pred_gbm)
+result; plot(mod_gbm)
+```
+
+With an overall accuracy of <code>0.9592</code>, this is a significant improvement on the classification method.
+
+## Method 3: Random Forest
+
+```{r randomforest}
+mod_rf <- randomForest(classe ~ ., data = myTrain)
+pred_rf <- predict(mod_rf, validation)
+result <- confusionMatrix(validation$classe, pred_rf)
+result; plot(mod_rf)
+```
+
+Here we achieve an overall accuracy of <code>0.9931</code>, which is better than both methods we tried previously.
+
+## Combining predictors
+Although we already have an exceptionally high accuracy using Random Forest, it would be interesting if we can acheive an even higher accuracy by combining our predictors.
+
+```{r combine}
+predDF <- data.frame(pred_rpart, pred_gbm, pred_rf, classe = validation$classe)
+mod_comb <- randomForest(classe ~ ., data = predDF)
+pred_comb <- predict(mod_comb, validation)
+result <- confusionMatrix(validation$classe, pred_comb)
+result
+```
+
+Our accuracy is almost the same as before, so combining all of our previous predictors does not seem to have an effect. Thus, it is safe to say that Random Forest performed the best out of the three.
+
+## Predicting on Test Data
+We will use the best performing model, Random Forest, to predict on the test cases. Since our overall accuracy was <code>.9941</code>, we should expect the out of sample error to be <code>0.59%</code>.
+
+```{r predict}
+pred_test <- predict(mod_rf, testing_clean)
+print(pred_test)
+```
