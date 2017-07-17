@@ -2,7 +2,7 @@
 title: "Practical Machine Learning Course Project"
 author: "Thomas Glucksman"
 date: "July 14, 2017"
-output: html_document
+output: md_document
 ---
 
 ```{r setup, include=FALSE}
